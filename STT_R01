@@ -1,0 +1,1075 @@
+# -*- coding: utf-8 -*-
+"""
+CÓDIGO COMPLETO Y EN LIMPIO
+
+"""
+
+import h5py
+import tkinter as tk
+from tkinter import filedialog
+import datetime
+import pandas as pd
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+import json
+
+# Lee el archivo txt de los Lazos de la planta
+with open('Lazos.txt', 'r') as archivo:
+    contenido = archivo.read()
+
+# Decodifica el contenido JSON en una lista de diccionarios
+Lazos = json.loads(contenido)
+
+
+
+def convertir_millisegundos_a_fecha_hora(millisegundos):
+    tiempo_inicial = datetime.datetime(1970, 1, 1)
+    segundos = millisegundos / 1000
+    return tiempo_inicial + datetime.timedelta(seconds=segundos)
+
+def leer_max_min_timestamp(ruta_archivo):
+    with h5py.File(ruta_archivo, 'r') as hdf_archivo:
+        valores_max_min = []
+        for grupo in hdf_archivo.values():
+            for dataset_name, dataset in grupo.items():
+                if dataset_name == 'Timestamp':
+                    valores_max_min.append((dataset[:].max(), dataset[:].min()))
+    return valores_max_min
+
+def obtener_datos_usuario(maximo):
+    
+    inicio_str0 = input("Introduce la fecha y hora de inicio (formato YYYY-MM-DD HH:MM:SS): ")
+    fin_str0 = input("Introduce la fecha y hora de fin (formato YYYY-MM-DD HH:MM:SS): ")
+    periodo_str = input("Introduce el periodo en segundos: ")
+    try:
+        
+        horas1, minutos1 = map(int, inicio_str0.split(':'))
+
+        # Crear un objeto datetime con la hora proporcionada
+        hora1 = datetime.datetime(1900, 1, 1, horas1, minutos1)
+        
+        inicio_str = (maximo[:10] + ' ' + hora1.strftime('%H:%M:%S'))
+        
+        horas2, minutos2 = map(int, fin_str0.split(':'))
+
+        # Crear un objeto datetime con la hora proporcionada
+        hora2 = datetime.datetime(1900, 1, 1, horas2, minutos2)
+        
+        fin_str = (maximo[:10] + ' ' + hora2.strftime('%H:%M:%S'))
+        
+        
+        inicio = datetime.datetime.strptime(inicio_str, "%Y-%m-%d %H:%M:%S")
+        fin = datetime.datetime.strptime(fin_str, "%Y-%m-%d %H:%M:%S")
+        periodo = int(periodo_str)
+        inicio_millisegundos = int((inicio - datetime.datetime(1970, 1, 1)) / datetime.timedelta(milliseconds=1))
+        fin_millisegundos = int((fin - datetime.datetime(1970, 1, 1)) / datetime.timedelta(milliseconds=1))
+        return inicio_millisegundos, fin_millisegundos, periodo
+    except ValueError:
+        print("Error: Formato de fecha incorrecto.")
+        return None, None, None
+
+def generar_vector_ntimestamp(inicio_millisegundos, fin_millisegundos, periodo):
+    Ntimestamp = []
+    tiempo_actual = inicio_millisegundos
+    while tiempo_actual <= fin_millisegundos:
+        Ntimestamp.append(tiempo_actual)
+        tiempo_actual += periodo * 1000  # Convertir periodo de segundos a milisegundos
+    return Ntimestamp
+
+def calcular_v(y_prima, y, x_prima, x, u):
+    if x_prima == x:
+        return np.nan  # Evitar división por cero
+    if np.isnan(y_prima) or np.isnan(y) or np.isnan(x_prima) or np.isnan(x):
+        return np.nan  # Evitar valores NaN
+    return ((y - y_prima) * (u - x) / (x - x_prima)) + y
+
+def encontrar_valor_mas_cercano(datos, valor):
+    # Encontrar el índice del valor inmediatamente inferior o igual en los datos
+    indice_inferior = np.searchsorted(datos, valor, side='right') - 1
+    # El índice del valor superior será el siguiente al índice inferior
+    indice_superior = indice_inferior + 1 if indice_inferior < len(datos) - 1 else indice_inferior
+    return datos[indice_inferior], datos[indice_superior]
+
+def regresion_3(y_1, Ntime , y_2):
+    # Check if t_i is a list or a numpy array of numbers
+    if not isinstance(y_1, (list, np.ndarray)):
+        raise TypeError("Input should be a list or numpy array of numbers.")
+    
+    # List to store moving average values
+    # print(y_1,y_2)
+    t_i_media_movil = []
+
+    for t in Ntime:
+        I_i , I_s = encontrar_valor_mas_cercano(y_2, t)
+        if I_s <= 2 or I_s >= (len(Ntime) -2):
+            
+            # print(I_i , I_s)
+            Y_1 = y_1[I_s:I_s + 5]# Variar segun la ventana que quieras realizar
+            T_1 = y_2[I_s:I_s + 5]
+            # print(Y_1 , T_1)
+            coefficients = np.polyfit(T_1, Y_1 , 3)
+            p = np.poly1d(coefficients)
+            
+            y_fit = p(t)
+            t_i_media_movil.append(y_fit)
+            # break
+        else:
+            # print(I_i , I_s-2)
+            Y_1 = y_1[I_s-2:I_s + 3]# Variar segun la ventana que quieras realizar
+            T_1 = y_2[I_s-2:I_s + 3]
+            # print(Y_1 , T_1)
+            coefficients = np.polyfit(T_1, Y_1 , 3)
+            # print(coefficients)
+            p = np.poly1d(coefficients)
+            
+            y_fit = p(t)
+            t_i_media_movil.append(y_fit)
+    
+    return (t_i_media_movil)
+
+def determinar_tipo_archivo(nombre_archivo):
+    try:
+        # Intentamos abrir el archivo como HDF5
+        with h5py.File(nombre_archivo, 'r') as hdf_archivo:
+            # Si no se produce ninguna excepción al abrirlo como HDF5, asumimos que es un archivo HDF5
+            print(f"El archivo {nombre_archivo} es un archivo HDF5")
+            return hdf_archivo
+    except (OSError, IOError):
+        pass
+
+    try:
+        # Intentamos leer el archivo como CSV utilizando pandas
+        pd.read_csv(nombre_archivo)
+        # Si no se produce ninguna excepción al leerlo como CSV, asumimos que es un archivo CSV
+        print(f"El archivo {nombre_archivo} es un archivo CSV")
+        return "csv"
+    except pd.errors.ParserError:
+        pass
+
+    # Si ninguna de las pruebas anteriores tiene éxito, no podemos determinar el tipo de archivo
+    print(f"No se pudo determinar el tipo de archivo para {nombre_archivo}")
+    return None
+
+
+def crear_nuevo_dataframe0(ruta_archivo):
+
+    df_nueva_t = pd.DataFrame()
+    df_nueva_g = pd.DataFrame()
+    ccp = n_c
+    # Abrir archivo HDF5
+    with h5py.File(ruta_archivo, 'r') as hdf_archivo:
+         for nombre_grupo, grupo in hdf_archivo.items():
+            # Iterar sobre los conjuntos de datos en el grupo
+            for dataset_name, dataset in grupo.items():
+                if (list(nombre_grupo[8:12]) == [ccp,'0','C','T'] ):
+                    if dataset_name != 'Timestamp':  # Saltar la columna Timestamp
+                            # Obtener datos del conjunto actual
+                        datos = dataset[:]  # Extraer los valores del conjunto de datos
+                        timestamps = np.ravel(grupo['Timestamp'][:])  # Aplanar el arreglo de timestamps
+                        
+                        # Convertir los datos a unidimensionales si es necesario
+                        timestamps = timestamps.flatten()
+                        datos = datos.flatten()
+                       
+                        # df = pd.DataFrame({'Ntimestamp' : timestamps , nombre_grupo : datos})
+                        df = pd.DataFrame({nombre_grupo : datos})
+                        
+                        df_nueva_t = pd.concat([df_nueva_t ,df] , axis = 1)
+                    
+                if (list(nombre_grupo[11]) == ['G']):
+                    if dataset_name != 'Timestamp':  # Saltar la columna Timestamp
+                            # Obtener datos del conjunto actual
+                        datos = dataset[:]  # Extraer los valores del conjunto de datos
+                        timestamps = np.ravel(grupo['Timestamp'][:])  # Aplanar el arreglo de timestamps
+                        
+                        # Convertir los datos a unidimensionales si es necesario
+                        timestamps = timestamps.flatten()
+                        datos = datos.flatten()
+                       
+                        # df = pd.DataFrame({'Ntimestamp' : timestamps , nombre_grupo : datos})
+                        df = pd.DataFrame({nombre_grupo : datos})
+                        
+                        df_nueva_g = pd.concat([df_nueva_g ,df] , axis = 1)
+                    
+                  
+                    
+    return df_nueva_t , df_nueva_g
+
+
+def crear_nuevo_dataframe(ruta_archivo, Ntimestamp,omitir_ccp):
+    
+    nuevo_dataframe = pd.DataFrame({'Ntimestamp': Ntimestamp})
+
+    hdf_archivo = determinar_tipo_archivo(ruta_archivo)
+    with h5py.File(ruta_archivo, 'r') as hdf_archivo:
+        for nombre_grupo, grupo in hdf_archivo.items():
+            if nombre_grupo not in omitir_ccp:   
+                for dataset_name, dataset in grupo.items():
+                    if dataset_name != 'Timestamp':
+                        datos = dataset[:]  # Extraer los valores del conjunto de datos
+                        timestamps = np.ravel(grupo['Timestamp'][:])  # Aplanar el arreglo de timestamps
+                        grupo_dataframe = pd.DataFrame(index=Ntimestamp)
+                        grupo_dataframe['Ntimestamp'] = Ntimestamp  # Agregar la columna Ntimestamp al DataFrame
+                            
+                        # Diferenciamos que funcion usar si es temperatura o posicion del CCP
+                                                
+                        if (list(nombre_grupo[11]) == ['T'] ) or (list(nombre_grupo[14:16])) == ['Z','Q'] or (list(nombre_grupo[14:16])) == ['Y','Q']:
+                            
+                            for i, (u, ntimestamp) in enumerate(zip(Ntimestamp, Ntimestamp[1:])):
+                                # Encontrar el valor inmediatamente inferior y superior en los datos de tiempo
+                                timestamp_inferior, timestamp_superior = encontrar_valor_mas_cercano(timestamps, ntimestamp)
+                                # Encontrar los valores correspondientes en los datos del grupo
+                                indice_inferior = np.argmax(timestamps == timestamp_inferior)
+                                indice_superior = np.argmax(timestamps == timestamp_superior)
+                                valor_inferior = datos[indice_inferior]
+                                valor_superior = datos[indice_superior]
+                                # Calcular v utilizando interpolación lineal
+                                v = calcular_v(valor_superior, valor_inferior, timestamp_superior, timestamp_inferior, u)
+                                grupo_dataframe.loc[ntimestamp, nombre_grupo] = v
+                        
+                        if (list(nombre_grupo[11]) == ['G']):
+            
+                            for i, (u, ntimestamp) in enumerate(zip(Ntimestamp, Ntimestamp[1:])):
+                            # Encontrar el valor inmediatamente inferior y superior en los datos de tiempo
+                                timestamp_inferior, timestamp_superior = encontrar_valor_mas_cercano(timestamps, ntimestamp)
+                                # Encontrar los valores correspondientes en los datos del grupo
+                                indice_inferior = np.argmax(timestamps == timestamp_inferior)
+                                indice_superior = np.argmax(timestamps == timestamp_superior)
+                                valor_inferior = datos[indice_inferior]
+                                valor_superior = datos[indice_superior]
+                                    
+                                grupo_dataframe.loc[ntimestamp, nombre_grupo] = valor_inferior
+                                    
+                                
+            
+                    
+        
+                            # Fusionar el nuevo DataFrame con el DataFrame del grupo
+                        nuevo_dataframe = pd.merge(nuevo_dataframe, grupo_dataframe, on='Ntimestamp', how='left')
+                        
+    # Eliminar columnas duplicadas (excepto 'Ntimestamp')
+    columnas_duplicadas = nuevo_dataframe.columns[nuevo_dataframe.columns.duplicated()]
+    columnas_duplicadas = columnas_duplicadas.drop('Ntimestamp', errors='ignore')
+    nuevo_dataframe = nuevo_dataframe.drop(columnas_duplicadas, axis=1)
+    
+    return nuevo_dataframe
+
+
+def seleccionar_archivo0():
+    global ccp_drop
+    global ruta_archivo
+    
+    
+    CCPS = []
+    ruta_archivo = filedialog.askopenfilename(title="Seleccionar archivo HDF5", filetypes=[("Archivo HDF5", "*.hdf5")])
+    if ruta_archivo:
+        nuevo_df_t , nuevo_df_g = crear_nuevo_dataframe0(ruta_archivo)
+                # nuevo_dataframe = nuevo_dataframe.applymap(lambda x: str(x).replace('.', ','))
+        print(nuevo_df_t , nuevo_df_g)
+        
+        # FILTRO PARA T1
+        data_sin_interpolar = nuevo_df_t
+        CP = n_c
+        PT = n_p
+        l=[]
+        for col in range (len(data_sin_interpolar.columns)):
+            cont = 0
+            for i in range(len(data_sin_interpolar.iloc[:,col])):
+                if data_sin_interpolar.iloc[i,col] > 350:
+                    cont = cont + 1
+            l.append(cont)
+            
+        # x = range(len(l))
+
+        # plt.scatter(x,l)
+        
+        t = []
+        for col in range (len(data_sin_interpolar.columns)):
+            
+            t.append(len(data_sin_interpolar.iloc[:,col].dropna()))
+
+        
+        for i in range(len(t)):
+            
+            if t[i] < 3000: # Cambiar el valor según guste para realizar el filtro correctamente
+                
+                CCPS.append(data_sin_interpolar.columns[i])   
+                CCPS.append(CP + PT + 'WC' + str(Lazos[i]['ccp'+str(int(CP)+1)]) + str(int(CP)+1) + '0CT001§§XQ01')
+                CCPS.append(CP + PT + 'WC' + str(Lazos[i]['ccp'+str(int(CP)+1)]) + CP + '0CG001§§XQ01')# ACTUALMENTE VOY A REALIZARLO MANUALMENTE PARA ELIMINAR TAMBIEN EL CCP2
+        
+        print(CCPS)
+        # FILTRO PARA POS
+        data_sin_interpolar = nuevo_df_g
+        
+        for col in range (len(data_sin_interpolar.columns)):
+            c = []
+            cont = 0
+            data_sin_interpolar1 = data_sin_interpolar.iloc[:,col].dropna()
+            for i in range(len(data_sin_interpolar1)-2):
+                if data_sin_interpolar1.iloc[i] < -70:
+                    break
+                c.append(data_sin_interpolar1.iloc[i]-data_sin_interpolar1.iloc[i+2])
+                
+            for j in c:
+                
+                if (j < -1 or j > 1.5):
+                    cont += 1
+                    #     
+            if cont > 20: # Cambiar el valor según guste para realizar el filtro correctamente
+                # GRAFICAR 
+                fig, ax1 = plt.subplots()
+                
+                x1 = range(len(data_sin_interpolar1))
+                ax1.scatter(x1,data_sin_interpolar1,color = 'm')
+
+                ax2 = ax1.twinx()
+                x0 = range(len(c))
+                ax2.scatter(x0,c,color='b')
+                
+                plt.show()
+                
+                CCPS.append(data_sin_interpolar.columns[col])
+            
+        CCPS = list(set(CCPS))
+            # Acepta si seguir con el ensayo
+            
+        datos = input ('Este ensayo ha descartado una cantidad de ' + str (len(CCPS)) + ' CCPs. ¿Deseas continuar con el proceso? (y/n)')
+            
+        if datos == 'y' or datos == 'Y':
+            ccp_drop = CCPS   
+                    
+    root.destroy()
+
+
+def seleccionar_archivo():
+    global df_Meteo
+    global df_data
+            
+    ruta_archivo = filedialog.askopenfilename(title="Seleccionar archivo HDF5", filetypes=[("Archivo HDF5", "*.hdf5")])
+        
+    if ruta_archivo:
+        max_min_timestamp = leer_max_min_timestamp(ruta_archivo)
+        if max_min_timestamp:
+            maximo_millisegundos, minimo_millisegundos = max_min_timestamp[0]
+            maximo_fecha_hora = convertir_millisegundos_a_fecha_hora(maximo_millisegundos)
+            minimo_fecha_hora = convertir_millisegundos_a_fecha_hora(minimo_millisegundos)
+            
+            print("Valor máximo de Timestamp en el archivo:", maximo_fecha_hora)
+            print("Valor mínimo de Timestamp en el archivo:", minimo_fecha_hora)
+            
+            maximo_fecha_hora_str = maximo_fecha_hora.strftime('%Y-%m-%d')
+            
+            
+            inicio_millisegundos, fin_millisegundos, periodo = obtener_datos_usuario(maximo_fecha_hora_str)
+            if inicio_millisegundos is not None and fin_millisegundos is not None and periodo is not None:
+                print("Inicio (milisegundos):", inicio_millisegundos)
+                print("Fin (milisegundos):", fin_millisegundos)
+                print("Periodo:", periodo)
+                Ntimestamp = generar_vector_ntimestamp(inicio_millisegundos, fin_millisegundos, periodo)
+                # print("Vector Ntimestamp:", Ntimestamp)
+
+                nuevo_dataframe = crear_nuevo_dataframe(ruta_archivo, Ntimestamp,ccp_drop)
+                # nuevo_dataframe = nuevo_dataframe.applymap(lambda x: str(x).replace('.', ','))
+                print(nuevo_dataframe)
+                
+                meteo = input('¿Son datos meteorológicos? (y/n)')
+                
+                if meteo == 'y':
+                    
+                    df_meteo = nuevo_dataframe
+                    df_Meteo = df_meteo
+                    
+                    IDN = df_Meteo.iloc[:,1]
+
+                    Time = pd.to_datetime(df_Meteo.iloc[:,0], unit='ms')
+
+                    WS = df_Meteo.iloc[:,2]                
+                    
+                    fig, ax1 = plt.subplots()
+
+                    ax1.plot(Time,WS, color ='g')
+                    ax1.set_ylim(-20,100)
+
+                    ax2 = ax1.twinx()
+                    ax2.plot(Time,IDN)
+                    ax2.set_ylim(0, 1000)
+                    
+                    
+                else:
+                    
+                    # Guardar el nuevo DataFrame en un archivo CSV
+                    nombre_archivo_csv = "nuevo_dataframe.csv"
+                    nuevo_dataframe.to_csv(nombre_archivo_csv, index=False)
+                    print(f"El nuevo DataFrame se ha guardado correctamente en {nombre_archivo_csv}")
+                    leer_csv('nuevo_dataframe.csv')
+    
+    root.destroy()
+
+
+def talarm(t_i):
+    cont = 0
+    for i in t_i:
+        if i > 355:
+            cont += 1
+    R_f = cont*10 /3600
+    
+    return R_f
+        
+
+"""
+FUNCIONES NECESARIAS PARA HACER EL STT
+
+"""
+
+def leer_csv(archivo):
+    global df
+    
+    df_data = pd.read_csv(archivo)
+    
+    df = df_data
+
+
+# PASAR ARCHIVO CSV A DATAFRAME CORRECTAMENTE
+
+def cambiar_puntos_comas(archivo):
+
+    df = pd.read_csv(archivo)
+    
+    # Itera sobre todas las columnas y convierte sus valores a flotantes
+    for columna in df.columns:
+        if df[columna].dtype == 'object':  # Verificar si la columna es de tipo objeto (cadena)
+            df[columna] = df[columna].str.replace(',', '.').astype(float)
+    
+    # Ahora, todas las columnas deben ser de tipo flotante
+    print(df.dtypes)
+    
+    # Guardar el DataFrame modificado en un nuevo archivo CSV si es necesario
+    df.to_csv("dataframe_modificado.csv", index=False)
+    
+    
+# OBTENER POSICIÓN TEMPERATURAS i E i+1 DEL CCP QUE SE ELIJA
+
+
+def Pos_Ti_T_i2(n_ccp,pt,Lazos,lazo):
+    
+    
+    
+    ccp = ("ccp"+n_ccp)
+    ccpi = ("ccp"+str(int(n_ccp)+1))
+
+    index_1 = lazo[ccp]
+    index_2 = lazo[ccpi]
+    
+    
+    n_buscado_pos = (pt + '1WC'+ index_1 + n_ccp + '0CG001§§XQ01')
+    n_buscado_t1 = (pt + '1WC'+ index_1 + n_ccp + '0CT001§§XQ01')
+    n_buscado_t2 = (pt + '1WC'+ index_2 + str(int(n_ccp)+1) + '0CT001§§XQ01')
+    
+
+
+    # accedo a pos t1 y t2 del ccp buscado del dataframe completo
+    try:
+        pos = df[['Ntimestamp' , n_buscado_pos]]
+    except KeyError:
+        
+        pos = pd.DataFrame()
+        
+        pass
+        
+    try:
+        t_i = df[['Ntimestamp' , n_buscado_t1]]
+    except KeyError:
+        
+        t_i = pd.DataFrame()
+        
+        pass
+        
+    try:
+        t_i2 = df[['Ntimestamp' , n_buscado_t2]]
+    except KeyError:
+        
+        t_i2 = pd.DataFrame()
+        
+        pass
+
+
+    return pos , t_i , t_i2
+
+
+def var_pos(pos):
+    
+    if  pos.empty == False:
+    
+        var_pos = []
+    
+        Pos = pos.iloc[1:,1]
+    
+        for posicion in range(len(Pos)-1):
+                
+            var_pos.append(abs(Pos[posicion+2] - Pos[posicion+1]))
+            
+    
+        var_POS = Pos.iloc[1:] - Pos.iloc[1:] + var_pos
+        
+    else:
+        
+        var_POS = pd.DataFrame() 
+
+    return var_POS
+
+
+def calculo_error_temperatura(t_i):
+    
+    # Primera ventana
+    
+    
+    if t_i.empty == False:
+    
+        T_i = t_i.iloc[1:,1]
+    
+        t_i_media_movil = []
+    
+        x = []
+        
+        for i in range(79):
+            
+            x.append(i)
+    
+        # PRIMER FILTRO
+    
+        for temperatura in range(len(T_i)-78):
+            
+            y = (T_i[temperatura:temperatura+79])
+            
+            
+            coefficients = np.polyfit(x,y,2)
+            p = np.poly1d(coefficients)
+    
+    
+            x_fit = np.linspace(np.min(x), np.max(x), 101)
+            y_fit = p(x_fit)
+            
+            t_i_media_movil.append(y_fit[50])
+    
+    
+        c = T_i[int((len(T_i)-len(t_i_media_movil))/2):len(T_i) - int((len(T_i)-len(t_i_media_movil))/2)]
+    
+        time = t_i.iloc[int((len(t_i)-len(t_i_media_movil))/2)+1:len(t_i) - int((len(t_i)-len(t_i_media_movil))/2),0]
+    
+        z = c - t_i_media_movil
+        
+        # Resultado de la primera ventana con tiempo y temperatura
+        
+        Z = pd.concat([time , z ],axis = 1)
+        
+        
+        # GRADIENTE 
+        
+        m_mov_ti = z-z
+    
+        for m_mov in range(len(z)-1):
+                
+            m_mov_ti.iloc[m_mov+1] = (z.iloc[m_mov+1] - z.iloc[m_mov])
+        
+        # VENTANA PARA EL CALCULO DEL ERROR
+        
+        error = m_mov_ti - m_mov_ti
+    
+        error = error.iloc[200:len(m_mov_ti)-200]
+    
+        for mov in range(len(m_mov_ti)-400):
+                    
+            x = ((((m_mov_ti.iloc[mov:mov+400] > 0).sum().sum())/(((m_mov_ti.iloc[mov:mov+400] > 0).sum().sum()) + ((m_mov_ti.iloc[mov:mov+400] < 0).sum().sum()))-0.5) * 2.5) # Cuenta el numero de valores del dataframe mayor que cero
+            
+            error.iloc[mov] = x
+            
+    else:
+        
+        error = pd.DataFrame()
+        
+        Z = pd.DataFrame()
+    print(error)
+    
+            
+    return error , Z 
+
+
+def STT_polinomica(error , tracking):
+    
+    x = tracking.iloc[range(len(error)),0]
+    y = error
+
+    # Crear una matriz de características para la regresión polinómica
+    X = np.column_stack([x**i for i in range(6)])  # Matriz de características de grado 5
+
+    # Calcular los coeficientes de la regresión polinómica
+    coeficientes = np.linalg.lstsq(X, y, rcond=None)[0]
+    
+    name = y.name
+    
+    return coeficientes, name
+    
+    
+"""
+
+Código que realiza el tracking y incidencia
+
+"""
+
+import math
+
+def Inciden(fecha, LongD, LatR, ColTilt, ColAz, TimeZone):
+    # RowShadow = 0
+    # SfOptEff = 0
+
+    SummerTime = GetSummerTime(fecha)
+
+    # IAM parameters, using the older parameter of Excelergy
+    # IamF0 = 1
+    # IamF1 = 0.0506  # 0.065460, new parameters
+    # IamF2 = -0.1763  # -0.1775, new parameters
+
+    Pi = math.pi
+    StdLongD = TimeZone * (-15)  # Longitud of the standar meridian (positive to the western)
+    # DeployAngle = 10 * Pi / 180
+    # StowAngle = (180 - 170) * Pi / 180
+    # T = 1 / (2 * TimeSteps) # Time Step divided by 2
+
+    JulianDay = fecha.day
+
+    if fecha.month == 2:
+        JulianDay += 31
+    elif fecha.month == 3:
+        JulianDay += 31 + 28
+    elif fecha.month == 4:
+        JulianDay += 31 + 28 + 31
+    elif fecha.month == 5:
+        JulianDay += 31 + 28 + 31 + 30
+    elif fecha.month == 6:
+        JulianDay += 31 + 28 + 31 + 30 + 31
+    elif fecha.month == 7:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30
+    elif fecha.month == 8:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30 + 31
+    elif fecha.month == 9:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30 + 31 + 31
+    elif fecha.month == 10:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30
+    elif fecha.month == 11:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31
+    elif fecha.month == 12:
+        JulianDay += 31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30
+
+    OfficialTime = fecha.hour + fecha.minute / 60 + fecha.second / 3600
+    StdTime = OfficialTime - SummerTime
+
+    # New B per Duffie & Beckman 1.5.3b
+    b = (JulianDay - 1) * 360 / 365 * Pi / 180
+
+    # Equation of Time in minutes
+    EOT = 229.2 * (0.000075 + 0.001868 * math.cos(b) - 0.032077 * math.sin(b) - 0.014615 * math.cos(b * 2) - 0.04089 * math.sin(b * 2))
+
+    # Declination in radians (per Duffie & Beckman 1.6.1)
+    Dec = 23.45 * math.sin(360 * (284 + JulianDay) / 365 * Pi / 180) * Pi / 180
+
+    # Calculation of the Solar Noon in hours
+    SolarNoon = 12 - (StdLongD - LongD) / 15 - EOT / 60
+
+    # Calculation of the number of daylight hours
+    DayLightHours = 2 / 15 * Arccos(-math.tan(LatR) * math.tan(Dec)) * 180 / Pi
+
+    # Calculation of Sun Rise and Sun Set in hours
+    SunRise = SolarNoon - DayLightHours / 2
+    SunSet = SolarNoon + DayLightHours / 2
+
+    SolarTime = StdTime + (StdLongD - LongD) / 15 + EOT / 60
+    HourAngle = (SolarTime - 12) * 15 * Pi / 180
+
+    SolarAlt = Arcsin(math.sin(Dec) * math.sin(LatR) + math.cos(LatR) * math.cos(Dec) * math.cos(HourAngle))
+    SolarAz = Arccos((math.sin(Dec) * math.cos(LatR) - math.cos(Dec) * math.cos(HourAngle) * math.sin(LatR)) / math.cos(SolarAlt))
+
+    if HourAngle > 0:
+        SolarAz = 2 * Pi - SolarAz
+
+    CosTh = math.sqrt(1 - (math.cos(SolarAlt - ColTilt) - math.cos(ColTilt) * math.cos(SolarAlt) * (1 - math.cos(SolarAz - ColAz))) ** 2)
+    Theta = Arccos(CosTh)  # Radians
+
+    if SolarAlt > 0:
+        Incidenceangle = Theta * 180 / Pi
+    else:
+        Incidenceangle = 0
+        TrackAngle = 0
+    
+    if Incidenceangle != 0:
+        TrackAngle = math.degrees(math.atan(math.cos(SolarAlt) * math.sin(SolarAz - ColAz) / (math.sin(SolarAlt - ColTilt) + math.sin(ColTilt) * math.cos(SolarAlt) * (1 - math.cos(SolarAz - ColAz)))))
+    
+    else:
+        TrackAngle = 0
+        
+    return Incidenceangle , TrackAngle
+
+def Arccos(x):
+    if x > 1:
+        x = 0.9999999
+    if x < -1:
+        x = -0.99999
+    return math.atan(-x / math.sqrt(-x * x + 1)) + 2 * math.atan(1)
+
+def Arcsin(x):
+    return math.atan(x / math.sqrt(-x * x + 1))
+
+def GetSummerTime(currentDate):
+    lastSundayMarch = LastSunday(currentDate.year, 3)
+    lastSundayOctober = LastSunday(currentDate.year, 10)
+
+    if lastSundayMarch <= currentDate < lastSundayOctober:
+        return 1
+    else:
+        return 0
+
+def LastSunday(year, month):
+    lastDay = (datetime.datetime(year, month + 1, 1) - datetime.timedelta(days=1))
+
+    while lastDay.weekday() != 6:
+        lastDay -= datetime.timedelta(days=1)
+
+    return lastDay
+
+def suma_cuadrados(lista):
+    suma = 0
+    for numero in lista:
+        suma += numero ** 2
+    return suma
+
+def RMS(error):    
+    global Rms
+    
+    Rms = []
+    for col in range(len(error.columns)):
+        # print(col)
+        # for i in df.iloc[:,col]:
+        
+        Rms.append(math.sqrt(suma_cuadrados(error.iloc[:,col])/len(error.iloc[:,col])))
+
+
+# FUNCIONES DEL STT
+
+def cargar_datos():
+    global n_c , n_p
+    
+    n_c = (entry_numero1.get())
+    n_p = (entry_numero2.get())
+    
+    ventana.destroy()
+
+    return n_c,n_p
+    
+def accion_1(pt,n_ccp):
+    
+    global error , Var_pos , ventana , T_alarm
+    
+    T_alarm  = []
+    
+    df_error = pd.DataFrame()
+    
+    df_var_pos = pd.DataFrame()
+    
+    df_ventana = pd.DataFrame()
+    
+    # pt = input("Introduzca el numero de la planta a la que vaya a querer realizar el STT:")
+
+    # n_ccp = input("Introduzca el numero de ccp al que vaya a querer realizar el STT:")
+
+    for lazo in Lazos:
+        pos , t_i , t_i2 = Pos_Ti_T_i2(n_ccp,pt,Lazos,lazo)
+    
+        VAR_POS = var_pos(pos)
+    
+        df_var_pos = pd.concat([df_var_pos , VAR_POS], axis = 1 )     
+    
+        Error , Ventana  = calculo_error_temperatura(t_i)
+        # print(Error)
+        df_ventana = pd.concat([df_ventana , Ventana], axis = 1 ) 
+        df_error = pd.concat([df_error , Error], axis = 1 ) 
+        if t_i.empty == False:
+            
+            T_i = t_i2.iloc[1:,1]            
+            T_alarm.append(talarm(T_i))
+        
+    
+    error = df_error
+    Var_pos = df_var_pos
+    ventana = df_ventana
+    
+    return error
+    
+def accion_2(pt,n_ccp):
+    
+    global incidence, tracking
+    
+    LongD = 55.465948
+    LatR =0.4320891
+    ColTilt = 0.0020001
+    ColAz = 0.0009693
+    TimeZone = -3.401415
+    
+    Incidencia = pd.DataFrame()
+
+    Tracking = pd.DataFrame()
+    
+    # pt = input("Introduzca el numero de la planta a la que vaya a querer realizar el STT:")
+
+    # n_ccp = input("Introduzca el numero de ccp al que vaya a querer realizar el STT:")
+  
+    
+    for col in df.columns[1:]:
+        
+        if (col[11] == 'G'):
+            pos = col
+            break
+       
+    if  df[pos].empty == False:
+       
+       # Posi = df[pos][1:]
+       
+       inc = []
+       trac = []
+       
+       for times in df.iloc[:,0]:
+               # Convertir milisegundos a segundos dividiendo por 1000
+           fecha_segundos = times / 1000
+           
+               # Crear un objeto datetime desde los segundos
+           fecha = datetime.datetime.fromtimestamp(fecha_segundos)
+           
+           incid, track = Inciden(fecha, LongD, LatR, ColTilt, ColAz, TimeZone)
+           
+           inc.append(incid)
+           
+           trac.append(track)
+           
+       incide = pd.DataFrame(inc)
+       
+       incide.columns = [pos]
+       
+       tracki = pd.DataFrame(trac)
+       
+       tracki.columns = [pos]
+
+    else:
+       
+       incide = pd.DataFrame()
+       
+       tracki = pd.DataFrame()        
+       
+       
+    Incidencia = pd.concat([Incidencia , incide], axis = 1 ) 
+   
+    Tracking = pd.concat([Tracking , tracki], axis = 1 ) 
+        
+   
+
+    print (Tracking, Incidencia)
+    
+    
+    incidence = Incidencia
+    tracking = Tracking
+    
+    
+        
+def accion_3(error):
+    
+    global coeficient
+    
+    df_coeficiente = pd.DataFrame()
+    
+    
+    
+    for CCP in range(len(error.columns)):
+    
+        # print (CCP)
+        coeficientes , nombre = STT_polinomica(error.iloc[: , CCP], tracking)
+    
+        nueva_coeficientes = pd.Series(coeficientes, name = nombre, index = ['a0','a1','a2','a3','a4','a5'])
+
+        # Añadir la Serie al DataFrame existente
+    
+    
+        df_coeficiente = pd.concat([df_coeficiente , nueva_coeficientes] , axis =1)
+        
+        
+    coeficient = df_coeficiente
+    
+    ventana2.destroy()
+
+
+def ejecutar_accion_2_y_3():
+    
+    accion_3(error)
+    
+    # accion_3(Error)
+
+
+ventana = tk.Tk()
+ventana.title("Ensayo STT")
+
+# Etiquetas y campos de entrada para los números
+tk.Label(ventana, text="Número de la planta:").grid(row=0, column=0, padx=5, pady=5)
+entry_numero1 = tk.Entry(ventana)
+entry_numero1.grid(row=0, column=1, padx=5, pady=5)
+
+tk.Label(ventana, text="Número de CCP:").grid(row=1, column=0, padx=5, pady=5)
+entry_numero2 = tk.Entry(ventana)
+entry_numero2.grid(row=1, column=1, padx=5, pady=5)
+
+# Botón para cargar datos
+boton_cargar = tk.Button(ventana, text="Cargar Datos", command=cargar_datos)
+boton_cargar.grid(row=2, column=0, columnspan=2, pady=5)
+
+ventana.mainloop()
+
+inicio = time.time()
+ccp_drop = []
+# Crear la ventana principal de la aplicación 1
+root = tk.Tk()
+root.title("Seleccionar Archivo HDF5 Meteorológico")
+
+# Botón para seleccionar el archivo
+button = tk.Button(root, text="Seleccionar Archivo Meteorológico", command=seleccionar_archivo)
+button.pack(pady=20)
+
+
+# Ejecutar la aplicación
+root.mainloop()
+
+fin = time.time()
+
+print ('El proceso ha tardado '+ str(fin-inicio) + ' segundos en ejecutarse.')
+
+
+inicio = time.time()
+
+# Crear la ventana principal de la aplicación 1
+root = tk.Tk()
+root.title("Seleccionar Archivo HDF5")
+
+# Botón para seleccionar el archivo
+button = tk.Button(root, text="Seleccionar Archivo", command=seleccionar_archivo0)
+button.pack(pady=20)
+
+
+
+# Ejecutar la aplicación
+root.mainloop()
+
+fin = time.time()
+
+print ('El proceso ha tardado '+ str(fin-inicio) + ' segundos en ejecutarse.')
+
+# Acto seguido se selecciona el archivo para interpolar
+
+inicio = time.time()
+
+# Crear la ventana principal de la aplicación 1
+root = tk.Tk()
+root.title("Seleccionar Archivo HDF5")
+
+# Botón para seleccionar el archivo
+button = tk.Button(root, text="Seleccionar Archivo", command=seleccionar_archivo)
+button.pack(pady=20)
+
+
+# Ejecutar la aplicación
+root.mainloop()
+
+fin = time.time()
+
+print ('El proceso ha tardado '+ str(fin-inicio) + ' segundos en ejecutarse.')
+
+# Crear la ventana principal 2
+ventana = tk.Tk()
+ventana.title("Ensayo STT")
+
+# Etiquetas y campos de entrada para los números
+# tk.Label(ventana, text="Número de la planta:").grid(row=0, column=0, padx=5, pady=5)
+# entry_numero1 = tk.Entry(ventana)
+# entry_numero1.grid(row=0, column=1, padx=5, pady=5)
+
+# tk.Label(ventana, text="Número de CCP:").grid(row=1, column=0, padx=5, pady=5)
+# entry_numero2 = tk.Entry(ventana)
+# entry_numero2.grid(row=1, column=1, padx=5, pady=5)
+
+# # Botón para cargar datos
+# boton_cargar = tk.Button(ventana, text="Cargar Datos", command=cargar_datos)
+# boton_cargar.grid(row=2, column=0, columnspan=2, pady=5)
+
+
+# Boton 1
+boton_1 = tk.Button(ventana, text="Cálculo del error STT", command=lambda: accion_1(n_p,n_c))
+boton_1.grid(row=3, column=0, padx=5, pady=5)
+
+# Boton 2
+boton_2 = tk.Button(ventana, text="Cáculo de Incidence y Tracking", command=lambda: accion_2(n_p,n_c))
+boton_2.grid(row=3, column=1, padx=5, pady=5)
+
+
+# Ejecutar la aplicación
+ventana.mainloop()
+
+# Crear la ventana principal 3
+ventana2 = tk.Tk()
+ventana2.title("Ensayo STT")
+
+# Boton 3
+boton_3 = tk.Button(ventana2, text="Cálculo de coeficientes STT", command=ejecutar_accion_2_y_3)
+boton_3.pack()
+
+# Ejecutar la aplicación
+ventana2.mainloop()
+
+
+
+# n = int(input ('Escribe el número de CCP que quieras representar: '))
+
+# coef = list(coeficient.iloc[:,n])
+
+# coef.reverse()
+
+# x = np.linspace(-80, 80, 10000)
+
+# # print(x)
+
+# y = np.polyval(coef, x)
+
+# plt.plot(x, y, label='Polinomio de grado 5')
+# plt.plot (tracking.iloc[0:len(Error)],Error.iloc[:,n])
+
+# plt.xlabel('x')
+# plt.ylabel('y')
+# plt.title('Detalle STT')
+# plt.legend() 
+
+# # Mostrar el gráfico
+# plt.grid(True)
+# plt.show()
+
+df_Meteo = df_Meteo.applymap(lambda x: str(x).replace('.', ','))
+
+df_Meteo.to_csv('Datos_Meteorologicos.csv',sep=';', index=False)
+print("El nuevo DataFrame se ha guardado correctamente ")
+
+ventana = ventana.applymap(lambda x: str(x).replace('.', ','))
+
+ventana.to_csv('Tfil_STT.csv', index=False)
+print("El nuevo DataFrame se ha guardado correctamente ")
+
+error = error.applymap(lambda x: str(x).replace('.', ','))
+
+error.to_csv('error_STT.csv',sep=';', index=False)
+print("El nuevo DataFrame se ha guardado correctamente ")
+
+coeficient = coeficient.applymap(lambda x: str(x).replace('.', ','))
+
+coeficient.to_csv('coeficientes_STT.csv',sep=';', index=False)
+print("El nuevo DataFrame se ha guardado correctamente ")
